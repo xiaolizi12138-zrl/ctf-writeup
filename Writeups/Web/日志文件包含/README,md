@@ -2,6 +2,7 @@
 第一步：理解题目环境
 打开页面，是一个简单的表单，可以输入文件路径并提交。
 
+
 首先需要知道：这是一个 LFI（Local File Inclusion，本地文件包含） 漏洞。核心代码类似：
 
 php
@@ -39,6 +40,7 @@ text
 日志会记录 HTTP 请求中的 User-Agent 字段。所以我们可以修改 User-Agent，在其中插入 PHP 代码。
 
 使用 curl 发送恶意请求：
+
 
 bash
 curl -A "<?php system('cat flag.php'); ?>" "https://目标网址/"
