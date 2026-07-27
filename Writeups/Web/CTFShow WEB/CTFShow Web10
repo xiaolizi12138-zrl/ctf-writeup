@@ -1,0 +1,94 @@
+1. 题目信息
+题目名称：ctf.show_web10
+
+题目类型：Web / SQL 注入绕过
+
+考察知识点：preg_replace 黑名单绕过、GROUP BY WITH ROLLUP 构造 NULL 密码、PHP 弱类型比较
+
+2. 代码分析
+通过查看网站源代码，我们发现后端使用了非常严格的 WAF 过滤机制：
+
+2.1 黑名单过滤
+php
+$regex = "/(select|from|where|join|sleep|and|\s|union|,)/i";
+return preg_replace($regex,"",$strParam);
+功能：将输入中的 select、from、where、join、sleep、and、所有空白字符 \s、union 和逗号 , 全部替换为空。
+
+漏洞：这个函数会递归执行，如果输入 selectselect，它会先删除中间的 select 变成 select，再删除一次变成空字符串。
+
+2.2 长度校验拦截
+php
+if(strlen($username)!=strlen(replaceSpecialChar($username))){
+    die("sql inject error");
+}
+作用：如果输入经过 preg_replace 替换后的长度和原始长度不一致，直接拦截并报错。这意味着只要输入中包含黑名单里的任何字符，就会立刻被拦截。
+
+2.3 核心查询与验证逻辑
+php
+$sql="select * from user where username = '$username'";
+$result=mysqli_query($con,$sql);
+if(mysqli_num_rows($result)>0){
+    while($row=mysqli_fetch_assoc($result)){
+        if($password==$row['password']){
+            echo $flag;
+        }
+    }
+}
+漏洞：数据库先根据 username 检索用户，然后使用 PHP 的 ==（弱比较） 对密码进行验证。
+
+3. 漏洞利用原理（关键点）
+由于常规的 union select 和 and 等关键字都被拉入了黑名单，常规注入已经失效。
+
+突破点在于 MySQL 的 GROUP BY ... WITH ROLLUP 特性：
+
+当我们使用 GROUP BY password WITH ROLLUP 进行聚合查询时，数据库会在结果集的最后自动生成一行汇总数据。
+
+这行汇总数据的 password 列的值，永远为 NULL。
+
+由于 PHP 使用的是 ==（弱类型比较）：
+
+"" == NULL 在 PHP 中返回值是 True。
+
+因此，如果我们将 password 参数留空（即传一个空字符串 ""），就能与 WITH ROLLUP 生成的 NULL 密码行匹配，绕过密码验证直接获取 Flag！
+
+4. 攻击步骤与 Payload
+4.1 绕过空格拦截
+由于所有空白字符 \s 都会被过滤，我们需要使用 MySQL 的多行注释 /**/ 代替空格。
+
+4.2 最终 Payload（直接用于 Burp 拦截包）
+在 Burp Suite 拦截到的登录 POST 请求中，将 username 参数的值修改为：
+
+sql
+admin'/**/or/**/1=1/**/group/**/by/**/password/**/with/**/rollup#
+Payload 详细拆解：
+
+admin'：闭合 SQL 语句前的单引号。
+
+/**/or/**/1=1：构造恒真条件，保证查询能正常返回数据。
+
+/**/group/**/by/**/password/**/with/**/rollup：触发聚合查询，在结果集末尾生成 password=NULL 的汇总行。
+
+#：注释掉原本 SQL 语句末尾的多余代码。
+
+4.3 POST 请求 Body 示例
+text
+username=admin'/**/or/**/1=1/**/group/**/by/**/password/**/with/**/rollup#&password=
+(注意：password= 后面留空，什么都不写。)
+
+5. 结果
+提交上述 POST 请求后，后端会取出数据并逐行比对密码。
+当遍历到 WITH ROLLUP 生成的 password=NULL 汇总行时，由于我们提交的密码为空字符串 ""，满足 "" == NULL。
+
+页面直接输出：
+
+text
+登陆成功
+ctfshow{xxxxxx}
+6. 总结与知识点回顾
+黑名单绕过新思路：遇到 preg_replace 过滤关键字时，除了用大小写或内联注释绕过，有时需要换一种数据库特性的攻击手法。
+
+WITH ROLLUP 特性：在 MySQL 聚合查询中，WITH ROLLUP 会额外生成一行汇总数据，其分组列的值通常为 NULL。
+
+PHP 弱比较特性：在 PHP 的 == 比较中，空字符串 "" 与 NULL 是相等的。这是绕过此处密码验证的最后一环。
+
+防御建议：在实际开发中，应使用 ===（全等比较） 来判断密码，并使用参数化查询（Prepared Statements）从根本上防止 SQL 注入。
