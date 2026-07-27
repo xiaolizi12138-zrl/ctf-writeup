@@ -1,0 +1,83 @@
+1. 题目信息
+题目名称：ctf.show_web9
+
+题目类型：Web / 代码审计与 SQL 注入绕过
+
+考察知识点：robots.txt 信息泄露、源码审计、md5($password, true) 二进制注入
+
+2. 题目分析
+进入题目后，显示一个常规的登录界面，用户名已默认为 admin。尝试使用万能密码进行 SQL 注入，发现没有明显回显，说明需要进行信息收集和代码审计。
+
+3. 解题步骤
+第一步：信息收集（目录扫描）
+使用目录扫描工具（如 dirsearch 或 wfuzz）对目标网站进行后台扫描，发现存在敏感文件：
+
+text
+[200] /robots.txt
+第二步：访问 robots.txt
+在浏览器中访问 /robots.txt，内容如下：
+
+text
+User-agent: *
+Disallow: /index.phps
+Disallow 字段暴露了隐藏的源码文件路径 /index.phps，通常提示该路径下存在重要信息。
+
+第三步：获取 PHP 源码
+在浏览器中访问 /index.phps，成功下载并查看到了网站的 PHP 源代码。核心逻辑如下：
+
+php
+<?php
+        $flag="";
+		$password=$_POST['password'];
+		if(strlen($password)>10){
+			die("password error");
+		}
+		$sql="select * from user where username ='admin' and password ='".md5($password,true)."'";
+		$result=mysqli_query($con,$sql);
+			if(mysqli_num_rows($result)>0){
+					while($row=mysqli_fetch_assoc($result)){
+						 echo "登陆成功<br>";
+						 echo $flag;
+					 }
+			}
+    ?>
+第四步：代码审计与漏洞发现
+源码中最关键的一行是：
+
+php
+$sql="select * from user where username ='admin' and password ='".md5($password,true)."'";
+漏洞点： md5($password, true)。
+
+md5() 函数在第二个参数为 true 时，返回的是 16 字节的原始二进制数据，而不是常见的 32 位十六进制字符串。
+
+由于特殊字符串的 MD5 原始二进制数据中可能包含 ' or ' 等特殊字符，这会导致原本的 SQL 语句被闭合并造成逻辑注入。
+
+第五步：Payload 构造与利用
+在 md5($password, true) 漏洞中，最经典的绕过字符串是 ffifdyop。
+
+当输入密码为 ffifdyop 时，后端拼凑出的 SQL 语句会变成类似：
+
+sql
+select * from user where username ='admin' and password ='' or '6\x...'
+由于 password ='' or '6\x...' 条件恒为真（or 后面的字符串非空），SQL 查询成功返回 admin 用户数据，从而绕过密码验证。
+
+最终 Payload：
+
+用户名： admin（默认即可）
+
+密码： ffifdyop
+
+第六步：获取 Flag
+输入上述 Payload 并点击登录，页面成功显示：
+
+text
+登陆成功
+ctfshow{xxxxxxxxx}
+获得最终 Flag。
+
+4. 总结与知识点
+敏感文件泄露：robots.txt 是 CTF 中常见的信息泄露点，通过它可以找到被 Disallow 的隐藏路径。
+
+源码审计：发现 index.phps 后必须仔细阅读源代码，寻找关键逻辑漏洞，而不是盲目进行暴力破解。
+
+md5($password, true) 注入：当遇到 md5($password, true) 的 SQL 查询时，如果未过滤特殊字符，可以通过构造特定的二进制字符串（如 ffifdyop）来实现 SQL 语句的闭合和绕过。
