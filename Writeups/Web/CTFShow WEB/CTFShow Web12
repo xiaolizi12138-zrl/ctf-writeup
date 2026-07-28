@@ -1,0 +1,50 @@
+1. 题目信息
+题目名称：ctf.show_web12
+
+题目类型：Web / 远程代码执行 (RCE)
+
+考察知识点：PHP 代码执行、disable_functions 绕过、目录读取与文件读取
+
+2. 漏洞发现与环境侦察
+打开题目页面，仅显示 where is the flag? 和一行注释 <!-- hit:?cmd= -->，提示通过 GET 参数 cmd 执行代码。尝试常规系统命令（如 ls, cat）无效，页面无任何回显。
+
+2.1 确认 PHP 代码执行环境
+输入 ?cmd=phpinfo();，成功获取到服务器的 PHP 配置信息。这确认了后端存在 PHP 代码执行漏洞，并提供了两个关键线索：
+
+disable_functions 配置： 禁用了 system, exec, shell_exec, popen, pcntl_exec 等所有系统级命令执行函数，以及 fopen, file_get_contents, readfile, opendir 等文件操作函数。
+
+绝对路径： DOCUMENT_ROOT 为 /var/www/html。
+
+3. 绕过限制并搜索目标文件
+3.1 使用 scandir() 查看目录
+虽然常见的文件读取函数被禁用，但 print_r() 和 scandir() 并未进入黑名单。使用以下 Payload 成功列出当前目录的文件：
+
+text
+?cmd=print_r(scandir('./'));
+3.2 发现混淆文件名
+回显的数组包含两个文件：
+
+text
+Array ( [0] => . [1] => .. [2] => 903c00105c0141fd37ff47697e916e53616e33a72fb3774ab213b3e2a732f56f.php [3] => index.php )
+出题人将包含 Flag 的文件名改为了 64 位随机字符，意图增加查找难度。
+
+4. 最终读取 Flag
+由于 highlight_file、readfile、file_get_contents 均被禁用，使用 include + 变量输出 组合绕过。
+因为 PHP 的 include 语句在包含文件时会执行其中的 PHP 代码，在包含后，可以直接打印文件中定义的 $flag 变量。
+
+最终 Payload：
+
+text
+?cmd=include('903c00105c0141fd37ff47697e916e53616e33a72fb3774ab213b3e2a732f56f.php');print($flag);
+5. 最终 Flag
+执行后，页面直接输出：
+
+text
+ctfshow{xxxxxx}
+6. 总结与知识点
+代码执行与函数禁用： disable_functions 限制了危险函数，但无法限制 PHP 自身原生功能的调用（如 scandir）。
+
+信息收集： phpinfo() 在 CTF 中是非常关键的侦察手段，可以获取环境配置、绝对路径及禁用函数列表。
+
+防御建议： 除了禁用函数外，应使用白名单机制，仅允许执行特定的安全操作，或彻底移除 eval、assert 等代码执行函数的使用。
+
