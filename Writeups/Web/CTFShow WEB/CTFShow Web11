@@ -1,0 +1,82 @@
+CTFShow Web11 题解 (Write-Up)
+1. 题目信息
+题目名称：ctf.show_web11
+
+题目类型：Web / PHP 代码审计
+
+考察知识点：黑名单过滤绕过、PHP Session 机制漏洞、弱类型比较 ("" == NULL)
+
+2. 代码分析
+通过查看网站源代码，发现以下核心逻辑：
+
+2.1 黑名单过滤
+php
+function replaceSpecialChar($strParam){
+    $regex = "/(select|from|where|join|sleep|and|\s|union|,)/i";
+    return preg_replace($regex,"",$strParam);
+}
+功能：将用户输入中的 select、from、where、union 以及所有空白字符全部过滤掉。
+
+目的：防止 SQL 注入（特别是联合查询和报错注入）。
+
+2.2 长度校验拦截
+php
+if(strlen($password)!=strlen(replaceSpecialChar($password))){
+    die("sql inject error");
+}
+原理：如果经过 replaceSpecialChar 过滤后的密码长度与原长度不一致，说明提交的内容触发了黑名单，直接拦截。
+
+2.3 最终验证逻辑（漏洞所在）
+php
+if($password==$_SESSION['password']){
+    echo $flag;
+}else{
+    echo "error";
+}
+漏洞点：这里使用了 ==（弱比较），并且没有强制校验 Session 是否已经初始化。
+
+3. 攻击原理（为什么删掉 Cookie 就能拿 Flag？）
+这道题的破局点在于 PHP Session 机制的一个特殊行为：
+
+当服务器接收到一个无效或为空的 PHPSESSID（或根本未提供 Cookie）时，PHP 会自动创建一个全新的 Session，并将其中的变量初始化为 NULL。
+
+此时，$_SESSION['password'] 的值为 NULL。
+
+我们提交空的密码 password=（即空字符串 ""）。
+
+在 PHP 中，使用 == 比较时："" == NULL 的结果是 True。
+
+因此，即使不猜密码、不绕过黑名单，只要让服务器认为我们是新访客，就能直接绕过密码验证。
+
+4. 解题步骤
+方法一（F12 开发者工具法——你采用的方法）
+按 F12 打开开发者工具，切换到 Application 选项卡。
+
+在左侧导航栏选择 Cookies，找到当前域的 Cookie 列表。
+
+找到 PHPSESSID，将其值删除（置为空），或者直接右键选择 Delete 删除该条 Cookie。
+
+刷新页面，回到登录界面。
+
+密码框什么都不填，直接点击“登陆”。
+
+方法二（Burp 抓包法）
+使用 Burp Suite 拦截登录请求包。
+
+在 Raw 面板中，找到 Cookie: PHPSESSID=... 这一行。
+
+删除这一整行 Cookie 头（或者将其值改为空）。
+
+将 POST Body 中的 password 参数设为空（例如 password=）。
+
+点击 Forward 放行，返回页面即可看到 Flag。
+
+5. 最终 Flag
+text
+ctfshow{xxxxxx}
+6. 总结与防御建议
+Session 起始检查：在读取或修改 $_SESSION 变量前，必须调用 session_start()，并确保已设置有效值。
+
+安全比较运算符：验证密码（或敏感数据）时，始终使用 ===（全等比较） 而不是 ==（弱比较），以防止空字符串与 NULL 的意外匹配。
+
+输入验证边界：不要假设用户一定会发送有效的 Cookie。即使客户端未提供 PHPSESSID，服务器也应拒绝访问。
